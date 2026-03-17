@@ -1,0 +1,459 @@
+{% extends "base.html" %}
+
+{% block title %}AWS VM Dashboard - Home{% endblock %}
+
+{% block extra_css %}
+<style>
+    .stats-row {
+        margin-bottom: 20px;
+    }
+
+    .stat-card {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        text-align: center;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        border-left: 4px solid var(--primary-color);
+    }
+
+    .stat-number {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: var(--primary-color);
+    }
+
+    .stat-label {
+        color: #666;
+        font-size: 0.95rem;
+        margin-top: 5px;
+    }
+
+    .instance-row:hover {
+        background-color: #f8f9fa !important;
+    }
+
+    .region-marker {
+        background: var(--primary-color);
+        color: white;
+        padding: 2px 8px;
+        border-radius: 3px;
+        font-size: 0.85rem;
+        font-weight: bold;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row mt-4">
+    <div class="col-12">
+        <h1 class="mb-4">
+            <i class="fas fa-server"></i> EC2 Instance Management Dashboard
+        </h1>
+    </div>
+</div>
+
+<!-- Statistics Cards -->
+<div class="row stats-row">
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="stat-card">
+            <div class="stat-number" id="totalInstances">0</div>
+            <div class="stat-label">Total Instances</div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="stat-card">
+            <div class="stat-number" id="runningInstances" style="color: #28a745;">0</div>
+            <div class="stat-label">Running</div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="stat-card">
+            <div class="stat-number" id="stoppedInstances" style="color: #dc3545;">0</div>
+            <div class="stat-label">Stopped</div>
+        </div>
+    </div>
+    <div class="col-md-3 col-sm-6 mb-3">
+        <div class="stat-card">
+            <div class="stat-number" id="regionCount" style="color: #0066cc;">0</div>
+            <div class="stat-label">Regions</div>
+        </div>
+    </div>
+</div>
+
+<!-- Filters and Search -->
+<div class="filter-section">
+    <div class="row">
+        <div class="col-md-4 mb-3">
+            <label for="searchInput" class="form-label">
+                <i class="fas fa-search"></i> Search Instances
+            </label>
+            <input type="text" class="form-control" id="searchInput" placeholder="Search by ID, IP, Type, Region...">
+        </div>
+        <div class="col-md-3 mb-3">
+            <label for="stateFilter" class="form-label">
+                <i class="fas fa-filter"></i> Filter by State
+            </label>
+            <select class="form-select" id="stateFilter">
+                <option value="">All States</option>
+                <option value="running">Running</option>
+                <option value="stopped">Stopped</option>
+                <option value="pending">Pending</option>
+                <option value="terminated">Terminated</option>
+            </select>
+        </div>
+        <div class="col-md-3 mb-3">
+            <label for="regionFilter" class="form-label">
+                <i class="fas fa-globe"></i> Filter by Region
+            </label>
+            <select class="form-select" id="regionFilter">
+                <option value="">All Regions</option>
+            </select>
+        </div>
+        <div class="col-md-2 d-flex align-items-end mb-3">
+            <button class="btn btn-secondary w-100" id="resetFilters">
+                <i class="fas fa-redo"></i> Reset
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Instances Table -->
+<div class="card mb-4">
+    <div class="card-header">
+        <i class="fas fa-table"></i> EC2 Instances List
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover" id="instancesTable">
+                <thead>
+                    <tr>
+                        <th>Instance ID</th>
+                        <th>State</th>
+                        <th>Type</th>
+                        <th>Region</th>
+                        <th>Public IP</th>
+                        <th>Private IP</th>
+                        <th>Launch Time</th>
+                        <th>Key Name</th>
+                        <th>Monitoring</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="instancesTableBody">
+                    <tr>
+                        <td colspan="10" class="text-center text-muted">
+                            <div class="loading-spinner">
+                                <div class="spinner-border" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Instances by Region Map -->
+<div class="card">
+    <div class="card-header">
+        <i class="fas fa-map"></i> Instances Distribution by Region
+    </div>
+    <div class="card-body">
+        <div class="map-container">
+            <div id="map"></div>
+        </div>
+        <div id="regionStats" class="mt-4"></div>
+    </div>
+</div>
+
+<!-- Instance Details Modal -->
+<div class="modal fade" id="instanceDetailsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Instance Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="instanceDetailsBody">
+                <!-- Content will be populated dynamically -->
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // AWS region coordinates for mapping
+    const regionCoordinates = {
+        'us-east-1': { lat: 38.8, lng: -77.0, name: 'N. Virginia' },
+        'us-east-2': { lat: 40.3, lng: -84.1, name: 'Ohio' },
+        'us-west-1': { lat: 37.5, lng: -122.3, name: 'N. California' },
+        'us-west-2': { lat: 45.5, lng: -121.2, name: 'Oregon' },
+        'eu-west-1': { lat: 53.3, lng: -6.2, name: 'Ireland' },
+        'eu-central-1': { lat: 50.1, lng: 8.7, name: 'Frankfurt' },
+        'ap-southeast-1': { lat: 1.3, lng: 103.8, name: 'Singapore' },
+        'ap-northeast-1': { lat: 35.7, lng: 139.7, name: 'Tokyo' },
+        'ap-southeast-2': { lat: -33.9, lng: 151.2, name: 'Sydney' },
+        'eu-west-2': { lat: 51.5, lng: -0.1, name: 'London' },
+        'eu-west-3': { lat: 48.9, lng: 2.3, name: 'Paris' },
+        'ap-south-1': { lat: 19.1, lng: 72.9, name: 'Mumbai' },
+        'ca-central-1': { lat: 43.6, lng: -79.6, name: 'Canada' },
+        'sa-east-1': { lat: -23.5, lng: -46.6, name: 'São Paulo' },
+    };
+
+    let allInstances = [];
+    let map;
+
+    // Initialize map
+    function initMap() {
+        map = L.map('map').setView([20, 0], 2);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+    }
+
+    // Fetch and display instances
+    async function loadInstances() {
+        try {
+            const response = await fetch('/api/instances');
+            allInstances = await response.json();
+            updateDashboard();
+        } catch (error) {
+            console.error('Error loading instances:', error);
+            alert('Error loading instances. Please check console.');
+        }
+    }
+
+    // Update dashboard with instances
+    function updateDashboard() {
+        updateStatistics();
+        updateFilters();
+        displayInstances(allInstances);
+        updateMap();
+    }
+
+    // Update statistics
+    function updateStatistics() {
+        const total = allInstances.length;
+        const running = allInstances.filter(i => i.State === 'running').length;
+        const stopped = allInstances.filter(i => i.State === 'stopped').length;
+        const regions = new Set(allInstances.map(i => i.Region)).size;
+
+        document.getElementById('totalInstances').textContent = total;
+        document.getElementById('runningInstances').textContent = running;
+        document.getElementById('stoppedInstances').textContent = stopped;
+        document.getElementById('regionCount').textContent = regions;
+    }
+
+    // Update filter options
+    function updateFilters() {
+        const regions = [...new Set(allInstances.map(i => i.Region))].sort();
+        const regionFilter = document.getElementById('regionFilter');
+        regions.forEach(region => {
+            const option = document.createElement('option');
+            option.value = region;
+            option.textContent = region;
+            regionFilter.appendChild(option);
+        });
+    }
+
+    // Display instances in table
+    function displayInstances(instances) {
+        const tbody = document.getElementById('instancesTableBody');
+        tbody.innerHTML = '';
+
+        if (instances.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted">No instances found</td></tr>';
+            return;
+        }
+
+        instances.forEach(instance => {
+            const row = document.createElement('tr');
+            row.className = 'instance-row';
+            
+            const stateClass = `status-${instance.State}`;
+            const launchTime = new Date(instance.LaunchTime).toLocaleDateString();
+            
+            row.innerHTML = `
+                <td><strong>${instance.InstanceId}</strong></td>
+                <td><span class="badge badge-${instance.State === 'running' ? 'success' : instance.State === 'stopped' ? 'danger' : 'warning'}">${instance.State.toUpperCase()}</span></td>
+                <td>${instance.InstanceType}</td>
+                <td><span class="region-marker">${instance.Region}</span></td>
+                <td><code>${instance.PublicIpAddress}</code></td>
+                <td><code>${instance.PrivateIpAddress}</code></td>
+                <td>${launchTime}</td>
+                <td>${instance.KeyName}</td>
+                <td>${instance.Monitoring === 'enabled' ? '<span class="badge bg-info">Enabled</span>' : '<span class="badge bg-secondary">Disabled</span>'}</td>
+                <td>
+                    <button class="btn btn-sm btn-primary" onclick="showInstanceDetails('${instance.InstanceId}', '${instance.Region}')">
+                        <i class="fas fa-eye"></i> Details
+                    </button>
+                </td>
+            `;
+            tbody.appendChild(row);
+        });
+    }
+
+    // Show instance details modal
+    async function showInstanceDetails(instanceId, region) {
+        try {
+            const response = await fetch(`/api/instance/${instanceId}/${region}`);
+            const data = await response.json();
+            
+            const instance = allInstances.find(i => i.InstanceId === instanceId);
+            
+            let detailsHtml = `
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>Basic Information</h6>
+                        <p><strong>Instance ID:</strong> ${instance.InstanceId}</p>
+                        <p><strong>Type:</strong> ${instance.InstanceType}</p>
+                        <p><strong>State:</strong> <span class="badge badge-${instance.State === 'running' ? 'success' : 'danger'}">${instance.State}</span></p>
+                        <p><strong>Region:</strong> ${instance.Region}</p>
+                        <p><strong>AZ:</strong> ${instance.AvailabilityZone}</p>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Networking</h6>
+                        <p><strong>Public IP:</strong> <code>${instance.PublicIpAddress}</code></p>
+                        <p><strong>Private IP:</strong> <code>${instance.PrivateIpAddress}</code></p>
+                        <p><strong>VPC ID:</strong> <code>${instance.VpcId}</code></p>
+                        <p><strong>Subnet ID:</strong> <code>${instance.SubnetId}</code></p>
+                    </div>
+                </div>
+                <hr>
+                <h6>Metrics</h6>
+                <div class="row">
+            `;
+            
+            if (data.metrics) {
+                Object.entries(data.metrics).forEach(([metric, value]) => {
+                    detailsHtml += `
+                        <div class="col-md-6 mb-3">
+                            <strong>${metric}:</strong> ${value ? value.toFixed(2) : 'N/A'}
+                        </div>
+                    `;
+                });
+            }
+            
+            detailsHtml += `</div>`;
+            
+            document.getElementById('instanceDetailsBody').innerHTML = detailsHtml;
+            new bootstrap.Modal(document.getElementById('instanceDetailsModal')).show();
+        } catch (error) {
+            console.error('Error loading instance details:', error);
+            alert('Error loading instance details');
+        }
+    }
+
+    // Update map with instance markers
+    function updateMap() {
+        // Clear existing markers
+        map.eachLayer(layer => {
+            if (layer instanceof L.Marker) {
+                map.removeLayer(layer);
+            }
+        });
+
+        // Count instances per region
+        const regionCounts = {};
+        allInstances.forEach(instance => {
+            regionCounts[instance.Region] = (regionCounts[instance.Region] || 0) + 1;
+        });
+
+        // Add markers for each region
+        Object.entries(regionCounts).forEach(([region, count]) => {
+            const coords = regionCoordinates[region];
+            if (coords) {
+                const marker = L.circleMarker([coords.lat, coords.lng], {
+                    radius: Math.min(count * 5, 30),
+                    fillColor: '#FF9900',
+                    color: '#232F3E',
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                });
+
+                marker.bindPopup(`
+                    <strong>${coords.name}</strong><br>
+                    Region: ${region}<br>
+                    Instances: ${count}
+                `);
+
+                marker.addTo(map);
+            }
+        });
+
+        // Update region statistics
+        updateRegionStats(regionCounts);
+    }
+
+    // Update region statistics
+    function updateRegionStats(regionCounts) {
+        const statsDiv = document.getElementById('regionStats');
+        let statsHtml = '<h6>Instances per Region:</h6><div class="row">';
+        
+        Object.entries(regionCounts).sort((a, b) => b[1] - a[1]).forEach(([region, count]) => {
+            statsHtml += `
+                <div class="col-md-3 mb-2">
+                    <div class="card p-3 text-center">
+                        <small class="text-muted">${region}</small>
+                        <strong class="text-primary" style="font-size: 1.5rem;">${count}</strong>
+                    </div>
+                </div>
+            `;
+        });
+        
+        statsHtml += '</div>';
+        statsDiv.innerHTML = statsHtml;
+    }
+
+    // Filter and search functionality
+    function applyFilters() {
+        const searchQuery = document.getElementById('searchInput').value.toLowerCase();
+        const stateFilter = document.getElementById('stateFilter').value;
+        const regionFilter = document.getElementById('regionFilter').value;
+
+        const filtered = allInstances.filter(instance => {
+            const matchesSearch = !searchQuery || 
+                instance.InstanceId.toLowerCase().includes(searchQuery) ||
+                instance.InstanceType.toLowerCase().includes(searchQuery) ||
+                instance.Region.toLowerCase().includes(searchQuery) ||
+                instance.PublicIpAddress.toLowerCase().includes(searchQuery) ||
+                instance.PrivateIpAddress.toLowerCase().includes(searchQuery);
+
+            const matchesState = !stateFilter || instance.State === stateFilter;
+            const matchesRegion = !regionFilter || instance.Region === regionFilter;
+
+            return matchesSearch && matchesState && matchesRegion;
+        });
+
+        displayInstances(filtered);
+    }
+
+    // Event listeners
+    document.getElementById('searchInput').addEventListener('input', applyFilters);
+    document.getElementById('stateFilter').addEventListener('change', applyFilters);
+    document.getElementById('regionFilter').addEventListener('change', applyFilters);
+    document.getElementById('resetFilters').addEventListener('click', () => {
+        document.getElementById('searchInput').value = '';
+        document.getElementById('stateFilter').value = '';
+        document.getElementById('regionFilter').value = '';
+        applyFilters();
+    });
+
+    // Auto-refresh instances every 30 seconds
+    setInterval(loadInstances, 30000);
+
+    // Initialize on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        initMap();
+        loadInstances();
+    });
+</script>
+{% endblock %}
